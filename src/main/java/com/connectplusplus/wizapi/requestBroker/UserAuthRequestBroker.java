@@ -12,11 +12,11 @@ import com.connectplusplus.wizapi.models.UserInfo;
 import com.connectplusplus.wizapi.requestHandler.UserAuthRequestHandler;
 
 @RestController
-@RequestMapping("/user/auth/")
+@RequestMapping("/auth/user")
 public class UserAuthRequestBroker {
 
 	@RequestMapping(
-				path = "register",
+				path = "/register",
 				method = RequestMethod.POST
 			)
 	public ResponseEntity<APIResponse<UserInfo>> registerNewUser(
@@ -39,7 +39,7 @@ public class UserAuthRequestBroker {
 	}
 
 	@RequestMapping(
-				path = "login",
+				path = "/login",
 				method = RequestMethod.POST
 			)
 	public ResponseEntity<APIResponse<UserInfo>> loginUser(
@@ -60,7 +60,7 @@ public class UserAuthRequestBroker {
 	}
 
 	@RequestMapping(
-				path = "validate",
+				path = "/validate",
 				method = RequestMethod.POST
 			)
 	public ResponseEntity<APIResponse<Boolean>> validateUserAccessToken(@RequestHeader("useraccesstoken") String userAccessToken) {
@@ -72,6 +72,24 @@ public class UserAuthRequestBroker {
 		} catch (Exception e) {
 			e.printStackTrace();
 			apiResponse = new APIResponse<>(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error", null);
+		}
+		
+		return new ResponseEntity<>(apiResponse, apiResponse.getStatus());
+	}
+	
+	@RequestMapping(
+				path = "",
+				method = RequestMethod.DELETE
+			)
+	public ResponseEntity<APIResponse<Boolean>> deleteUser(@RequestHeader("useraccesstoken") String userAccessToken) {
+		
+		APIResponse<Boolean> apiResponse = null;
+		
+		try {
+			apiResponse = UserAuthRequestHandler.deleteUser(userAccessToken);
+		} catch (Exception e) {
+			e.printStackTrace();
+			apiResponse = new APIResponse<Boolean>(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error", null);
 		}
 		
 		return new ResponseEntity<>(apiResponse, apiResponse.getStatus());

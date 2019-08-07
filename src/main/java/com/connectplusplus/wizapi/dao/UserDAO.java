@@ -5,6 +5,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.sql.Types;
+import java.util.ArrayList;
 
 import org.springframework.http.HttpStatus;
 
@@ -49,7 +51,7 @@ public class UserDAO {
 				// user already exists
 				
 				dbResponse.setStatus(HttpStatus.BAD_REQUEST);
-				dbResponse.setMessage("User already exists");
+				dbResponse.setMessage("User already registered");
 				dbResponse.setResponse(true);
 			}
 			
@@ -60,6 +62,52 @@ public class UserDAO {
 			dbResponse.setMessage("Internal Server Error");
 			dbResponse.setStatus(null);
 			
+		}
+		
+		return dbResponse;
+	}
+
+	/**
+	 * utility method to validate user access token in DB
+	 * */
+	public static DBResponse<Boolean> validateUserAccessToken(String regno, String token) {
+		
+		DBResponse<Boolean> dbResponse = new DBResponse<>();
+		
+		// SQL Queries
+		String query1 = "SELECT COUNT(*) FROM users WHERE regno=? AND useraccesstoken=?";
+		
+		
+		try (Connection conn = CommonDAO.getConnection()) {
+			
+			PreparedStatement statement = conn.prepareStatement(query1);
+			statement.setString(1, regno);
+			statement.setString(2, token);
+			ResultSet resultSet = statement.executeQuery();
+			
+			if (resultSet.next() && resultSet.getInt("count") != 0) {
+				
+				// user access token verified
+				
+				dbResponse.setStatus(HttpStatus.OK);
+				dbResponse.setMessage("User access token verified");
+				dbResponse.setResponse(true);
+				
+			} else {
+				
+				// invalid user access token
+				
+				dbResponse.setStatus(HttpStatus.UNAUTHORIZED);
+				dbResponse.setMessage("Invalid Arguments");
+				dbResponse.setResponse(false);
+			}
+			
+		} catch (SQLException e) {
+			e.printStackTrace();
+			
+			dbResponse.setStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+			dbResponse.setMessage("Internal Server Error");
+			dbResponse.setResponse(null);
 		}
 		
 		return dbResponse;
@@ -242,6 +290,120 @@ public class UserDAO {
 	}
 
 	/**
+	 * utility method to check if user account is set to be deleted
+	 * */
+	public static DBResponse<Boolean> isUserAccountDeleted(String regno) {
+		
+		DBResponse<Boolean> dbResponse = new DBResponse<>();
+		
+		// SQL Queries
+		String query1 = "SELECT request_date FROM delete_accounts WHERE regno=?";
+		
+		try (Connection conn = CommonDAO.getConnection()) {
+			
+			PreparedStatement statement = conn.prepareStatement(query1);
+			statement.setString(1, regno);
+			ResultSet resultSet = statement.executeQuery();
+			
+			dbResponse.setStatus(HttpStatus.OK);
+			if (resultSet.next()) {
+				dbResponse.setMessage("User account is to be deleted");
+				dbResponse.setResponse(true);
+			} else {
+				dbResponse.setMessage("User account is activated");
+				dbResponse.setResponse(false);
+			}
+			
+		} catch (SQLException e) {
+			e.printStackTrace();
+			
+			dbResponse.setStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+			dbResponse.setMessage("Internal Server Error");
+			dbResponse.setResponse(null);
+		}
+		
+		return dbResponse;
+	}
+
+	/**
+	 * re-activate user account, after user deleting the account
+	 * */
+	public static DBResponse<UserInfo> reactivateUserAccount(String regno, String password) {
+		
+		DBResponse<UserInfo> dbResponse = new DBResponse<>();
+		
+		// SQL Queries
+		String query1 = "DELETE FROM delete_accounts WHERE regno=?";
+		String query2 = "UPDATE users SET useraccesstoken=?, registration_time_stamp=? WHERE regno=?";
+		
+		
+		try (Connection conn = CommonDAO.getConnection()) {
+			
+			conn.setAutoCommit(false);  // set auto-commit
+			
+			
+			// delete user registration number from delete accounts table
+			
+			PreparedStatement statement = conn.prepareStatement(query1);
+			statement.setString(1, regno);
+			
+			statement.executeUpdate();
+			
+			
+			// generate user access token
+			
+			DBResponse<UserInfo> userDBResponse = UserDAO.getUserInfo(regno);
+			
+			if (HttpStatus.OK != userDBResponse.getStatus()) {
+				
+				// something went wrong
+				
+				dbResponse.setStatus(userDBResponse.getStatus());
+				dbResponse.setMessage(userDBResponse.getMessage());
+				dbResponse.setResponse(null);
+
+			} else {
+				
+				Timestamp currTimestamp = new Timestamp(System.currentTimeMillis());
+				String firstname = userDBResponse.getResponse().getFirstname();
+				String lastname = userDBResponse.getResponse().getLastname();
+				String email = userDBResponse.getResponse().getEmail();
+				
+				String token = CommonUtils.generateUserAccessToken(regno, firstname, lastname, email, password, currTimestamp);
+				
+				userDBResponse.getResponse().setUserAccessToken(token);
+				
+				
+				// store current timestamp and user access token into DB
+				
+				statement = conn.prepareStatement(query2);
+				statement.setString(1, token);
+				statement.setTimestamp(2, currTimestamp);
+				statement.setString(3, regno);
+				
+				statement.executeUpdate();
+				
+				conn.commit();  // commit all changes into DB
+				
+				
+				dbResponse.setStatus(HttpStatus.OK);
+				dbResponse.setMessage("User account re-activated");
+				dbResponse.setResponse(userDBResponse.getResponse());
+			}
+			
+		} catch (SQLException e) {
+			e.printStackTrace();
+			
+			dbResponse.setStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+			dbResponse.setMessage("Internal Server Error");
+			dbResponse.setResponse(null);
+		}
+		
+		
+		return dbResponse;
+	}
+
+	/**
 	 * login existing user
 	 * */
 	public static DBResponse<UserInfo> loginExistingUser(String regno, String password) {
@@ -249,7 +411,7 @@ public class UserDAO {
 		DBResponse<UserInfo> dbResponse = new DBResponse<>();
 		
 		// SQL Queries
-		String query1 = "SELECT firstname, lastname, email, useraccesstoken, password FROM users WHERE regno=?";
+		String query1 = "SELECT password FROM users WHERE regno=?";
 		
 		
 		try (Connection conn = CommonDAO.getConnection()) {
@@ -258,24 +420,36 @@ public class UserDAO {
 			statement.setString(1, regno);
 			ResultSet resultSet = statement.executeQuery();
 			
+			
+			// check password
+			
 			if (resultSet.next() && EncryptionUtils.compareHash(resultSet.getString("password"), password)) {
 				
 				// user credentials validated
 				
-				String firstname = resultSet.getString("firstname");
-				String lastname = resultSet.getString("lastname");
-				String email = resultSet.getString("email");
-				String userAccessToken = resultSet.getString("useraccesstoken");
+				// get user information
+				DBResponse<UserInfo> userDBResponse = UserDAO.getUserInfo(regno);
 				
-				UserInfo userInfo = new UserInfo(regno, firstname, lastname, email, userAccessToken);
-				
-				dbResponse.setStatus(HttpStatus.OK);
-				dbResponse.setMessage("User Logged In Successfully");
-				dbResponse.setResponse(userInfo);
+				if (HttpStatus.OK != userDBResponse.getStatus()) {
+					
+					// something went wrong
+					
+					dbResponse.setStatus(userDBResponse.getStatus());
+					dbResponse.setMessage(userDBResponse.getMessage());
+					dbResponse.setResponse(null);
+					
+				} else {
+					
+					// user logged in successfully
+					
+					dbResponse.setStatus(HttpStatus.OK);
+					dbResponse.setMessage("User Logged In Successfully");
+					dbResponse.setResponse(userDBResponse.getResponse());
+				}
 				
 			} else {
 				
-				// invalid user credentials
+				// either registration number or password is incorrect
 				
 				dbResponse.setStatus(HttpStatus.BAD_REQUEST);
 				dbResponse.setMessage("Invalid Arguments");
@@ -293,7 +467,7 @@ public class UserDAO {
 		
 		return dbResponse;
 	}
-	
+
 	/**
 	 * delete existing user from DB
 	 * */
@@ -302,15 +476,35 @@ public class UserDAO {
 		DBResponse<Boolean> dbResponse = new DBResponse<>();
 		
 		// SQL Queries
-		String query1 = "DELECT FROM users WHERE regno=?";
+		String query1 = "INSERT INTO delete_accounts(regno) VALUES (?)";
+		String query2 = "UPDATE users SET useraccesstoken=?, registration_time_stamp=? WHERE regno=?";
 		
 		
 		try (Connection conn = CommonDAO.getConnection()) {
+			
+			conn.setAutoCommit(false);  // disable auto-commit
+			
+			
+			// insert user registration number into table for account deletion
 			
 			PreparedStatement statement = conn.prepareStatement(query1);
 			statement.setString(1, regno);
 			
 			statement.executeUpdate();
+			
+			
+			// delete user access token of the user
+			
+			statement = conn.prepareStatement(query2);
+			statement.setNull(1, Types.VARCHAR);
+			statement.setNull(2, Types.TIMESTAMP);
+			statement.setString(3, regno);
+			
+			statement.executeUpdate();
+			
+			
+			conn.commit();  // commit all changes to DB
+			
 			
 			// user deleted successfully
 			
@@ -329,37 +523,32 @@ public class UserDAO {
 		return dbResponse;
 	}
 	
-	public static DBResponse<Boolean> validateUserAccessToken(String regno, String token) {
+	/**
+	 * utility method to get registration number of all accounts that are due to be permanently deleted from DB
+	 * */
+	public static DBResponse<ArrayList<String>> getAccountsToBePermanentlyDeleted(String daysCount) {
 		
-		DBResponse<Boolean> dbResponse = new DBResponse<>();
+		DBResponse<ArrayList<String>> dbResponse = new DBResponse<>();
 		
 		// SQL Queries
-		String query1 = "SELECT COUNT(*) FROM users WHERE regno=? AND useraccesstoken=?";
+		String query1 = "SELECT regno FROM delete_accounts WHERE request_date >= (CURRENT_TIMESTAMP - INTERVAL \'" + daysCount + "\' day)";
 		
 		
 		try (Connection conn = CommonDAO.getConnection()) {
 			
 			PreparedStatement statement = conn.prepareStatement(query1);
-			statement.setString(1, regno);
-			statement.setString(2, token);
 			ResultSet resultSet = statement.executeQuery();
 			
-			if (resultSet.next() && resultSet.getInt("count") != 0) {
+			ArrayList<String> list = new ArrayList<>();
+			
+			while (resultSet.next()) {
 				
-				// user access token verified
-				
-				dbResponse.setStatus(HttpStatus.OK);
-				dbResponse.setMessage("User access token verified");
-				dbResponse.setResponse(true);
-				
-			} else {
-				
-				// invalid user access token
-				
-				dbResponse.setStatus(HttpStatus.UNAUTHORIZED);
-				dbResponse.setMessage("Invalid Arguments");
-				dbResponse.setResponse(false);
+				list.add(resultSet.getString("regno"));
 			}
+			
+			dbResponse.setStatus(HttpStatus.OK);
+			dbResponse.setMessage("Accounts to be permanently deleted from DB");
+			dbResponse.setResponse(list);
 			
 		} catch (SQLException e) {
 			e.printStackTrace();
@@ -368,6 +557,57 @@ public class UserDAO {
 			dbResponse.setMessage("Internal Server Error");
 			dbResponse.setResponse(null);
 		}
+		
+		
+		return dbResponse;
+	}
+	
+	public static DBResponse<Boolean> permanentlyDeleteUser(String regno) {
+		
+		DBResponse<Boolean> dbResponse = new DBResponse<>();
+		
+		// SQL Queries
+		String query1 = "DELETE FROM users WHERE regno=?";
+		String query2 = "DELETE FROM delete_accounts WHERE regno=?";
+		
+		
+		try (Connection conn = CommonDAO.getConnection()) {
+			
+			conn.setAutoCommit(false);  // disable auto commit
+			
+			// delete user account
+			
+			PreparedStatement statement = conn.prepareStatement(query1);
+			statement.setString(1, regno);
+			
+			statement.executeUpdate();
+			
+			
+			// delete registration number from the table store accounts to be deleted permanently
+			
+			statement = conn.prepareStatement(query2);
+			statement.setString(1, regno);
+			
+			statement.executeUpdate();
+			
+			conn.commit();  // commit all changes to DB
+			
+			
+			// user account permanently deleted successfully
+			
+			dbResponse.setStatus(HttpStatus.OK);
+			dbResponse.setMessage("User deleted permanently");
+			dbResponse.setResponse(true);
+			
+			
+		} catch (SQLException e) {
+			e.printStackTrace();
+			
+			dbResponse.setStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+			dbResponse.setMessage("Internal Server Error");
+			dbResponse.setResponse(false);
+		}
+		
 		
 		return dbResponse;
 	}

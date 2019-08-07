@@ -12,12 +12,20 @@ import org.springframework.stereotype.Component;
 @Component
 public class Properties {
 	
+	/* * * * * * * * * * * * * *
+	 * Application Properties  *
+	 * * * * * * * * * * * * * */
+	
+	@Value("${app.secretKey}")
+	private String appSecret;
+	
+	@Value("${app.emailTemplatesRoute}")
+	private String appEmailTemplatesRoute;
+	
+	
 	/* * * * * * * * * * * * * * * * * * *
 	 *  Encryption & Encoding Properties *
 	 * * * * * * * * * * * * * * * * * * */
-
-	@Value("${app.secretKey}")
-	private String appSecret;
 	
 	@Value("${app.encryption.key}")
 	private String encryptionKey;
@@ -58,6 +66,13 @@ public class Properties {
 	}
 	public void setAppSecret(String appSecret) {
 		this.appSecret = appSecret;
+	}
+	
+	public String getAppEmailTemplatesRoute() {
+		return appEmailTemplatesRoute;
+	}
+	public void setAppEmailTemplatesRoute(String appEmailTemplatesRoute) {
+		this.appEmailTemplatesRoute = appEmailTemplatesRoute;
 	}
 	
 	public String getEncryptionKey() {

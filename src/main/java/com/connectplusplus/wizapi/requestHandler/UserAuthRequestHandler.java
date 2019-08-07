@@ -1,12 +1,16 @@
 package com.connectplusplus.wizapi.requestHandler;
 
+import java.util.HashMap;
+
 import org.springframework.http.HttpStatus;
 
+import com.connectplusplus.wizapi.EmailType;
 import com.connectplusplus.wizapi.dao.UserDAO;
 import com.connectplusplus.wizapi.models.APIResponse;
 import com.connectplusplus.wizapi.models.DBResponse;
 import com.connectplusplus.wizapi.models.UserAccessToken;
 import com.connectplusplus.wizapi.models.UserInfo;
+import com.connectplusplus.wizapi.utils.CommonUtils;
 import com.connectplusplus.wizapi.utils.EncodingUtils;
 import com.connectplusplus.wizapi.utils.EncryptionUtils;
 import com.connectplusplus.wizapi.utils.StringUtils;
@@ -36,7 +40,8 @@ public class UserAuthRequestHandler {
 					UserAccessToken token = EncodingUtils.decodePojo(decryptedUserAccessToken, UserAccessToken.class);
 					
 					
-					// validate user access token from DB		
+					// validate user access token from DB
+					
 					DBResponse<Boolean> dbResponse = UserDAO.validateUserAccessToken(token.getRegno(), userAccessToken);
 					
 					apiResponse.setStatus(dbResponse.getStatus());
@@ -118,14 +123,124 @@ public class UserAuthRequestHandler {
 			
 		} else {
 			
-			// login user
+			// check if user account has been deleted
 			
-			DBResponse<UserInfo> dbResponse = UserDAO.loginExistingUser(regno, password);
+			DBResponse<Boolean> isAccountDeleted = UserDAO.isUserAccountDeleted(regno);
+			if (HttpStatus.OK != isAccountDeleted.getStatus()) {
+				
+				// something went wrong
+				
+				apiResponse.setStatus(isAccountDeleted.getStatus());
+				apiResponse.setMessage(isAccountDeleted.getMessage());
+				apiResponse.setResponse(null);
+				
+				return apiResponse;
+			}
+			
+			if (isAccountDeleted.getResponse()) {
+				
+				// reactivate user account & login user
+				
+				DBResponse<UserInfo> dbResponse = UserDAO.reactivateUserAccount(regno, password);
+				
+				apiResponse.setStatus(dbResponse.getStatus());
+				apiResponse.setMessage(dbResponse.getMessage());
+				apiResponse.setResponse(dbResponse.getResponse());
+				
+				
+				if (HttpStatus.OK == apiResponse.getStatus()) {
+					
+					// send notification email to the user about reactivation of account
+					
+					String fullname = dbResponse.getResponse().getFirstname() + " " + dbResponse.getResponse().getLastname();
+					String email = dbResponse.getResponse().getEmail();
+					String subject = "Account Reactivated Successfully";
+					
+					HashMap<String, String> values = new HashMap<>();
+					values.put("@@regno@@", dbResponse.getResponse().getRegno());
+					values.put("@@name@@", fullname);
+					
+					boolean isEmailSent = CommonUtils.sendEmail(email, subject, EmailType.REACTIVATE_ACCOUNT, values);
+					if (!isEmailSent) {
+						
+						// email could not be sent
+						
+						// TODO: Do something here, because the account has already been reactivated
+					}
+				}
+				
+			} else {
+				
+				// login user
+				
+				DBResponse<UserInfo> dbResponse = UserDAO.loginExistingUser(regno, password);
+				
+				apiResponse.setStatus(dbResponse.getStatus());
+				apiResponse.setMessage(dbResponse.getMessage());
+				apiResponse.setResponse(dbResponse.getResponse());
+			}
+		}
+		
+		
+		return apiResponse;
+	}
+
+	public static APIResponse<Boolean> deleteUser(String userAccessToken) {
+		
+		APIResponse<Boolean> apiResponse = new APIResponse<>();
+		
+		
+		// decode user access token
+		
+		APIResponse<UserAccessToken> tempApiResponse = CommonUtils.getUserAccessTokenDecoded(userAccessToken);
+		if (null == tempApiResponse.getResponse()) {
+			
+			// user access token could be decoded
+			
+			apiResponse.setStatus(tempApiResponse.getStatus());
+			apiResponse.setMessage(tempApiResponse.getMessage());
+			apiResponse.setResponse(null);
+			
+			return apiResponse;
+		}
+		
+		UserAccessToken token = tempApiResponse.getResponse();
+		
+		
+		// delete user from DB
+		
+		DBResponse<Boolean> dbResponse = UserDAO.deleteExistingUser(token.getRegno());
+		if (!dbResponse.getResponse()) {
+			
+			// account could not be deleted
 			
 			apiResponse.setStatus(dbResponse.getStatus());
 			apiResponse.setMessage(dbResponse.getMessage());
-			apiResponse.setResponse(dbResponse.getResponse());
+			apiResponse.setResponse(false);
+			
+			return apiResponse;
 		}
+		
+		
+		// send account delete confirmation email
+		
+		String fullname = token.getFirstname() + " " + token.getLastname();
+		
+		HashMap<String, String> values = new HashMap<>();
+		values.put("@@regno@@", token.getRegno());
+		values.put("@@name@@", fullname);
+		
+		boolean emailSent = CommonUtils.sendEmail(token.getEmail(), "Account Deleted Successfully", EmailType.DELETE_ACCOUNT, values);
+		if (!emailSent) {
+			
+			// email could not be sent
+			
+			// TODO: Do something here, because the account has already been deleted
+		}
+		
+		apiResponse.setStatus(HttpStatus.OK);
+		apiResponse.setMessage("Account Deleted Successfully");
+		apiResponse.setResponse(true);
 		
 		
 		return apiResponse;
